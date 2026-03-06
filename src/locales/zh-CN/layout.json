@@ -1,10 +1,8 @@
 {
-  "title": "Jellyfish Admin",
-  "subtitle": "Vite + React 脚手架",
-  "welcome": "欢迎使用 Jellyfish 前端脚手架",
+  "title": "Jellyfish",
+  "subtitle": "AI 短剧工作台",
+  "welcome": "欢迎使用 Jellyfish",
   "menu": {
-    "dashboard": "仪表盘",
-    "list": "列表页",
     "settings": "系统设置"
   },
   "user": {

@@ -1,19 +1,20 @@
 import React, { useMemo } from 'react'
-import { Layout, Menu, theme, Dropdown, Space, Avatar, Typography, Select } from 'antd'
+import { Layout, Menu, theme, Dropdown, Space, Avatar, Select, Breadcrumb } from 'antd'
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  PieChartOutlined,
-  UnorderedListOutlined,
   SettingOutlined,
   UserOutlined,
+  FolderOutlined,
+  PictureOutlined,
+  FileTextOutlined,
+  InboxOutlined,
 } from '@ant-design/icons'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../store/useAppStore'
 import { useTranslation } from 'react-i18next'
 
 const { Header, Sider, Content } = Layout
-const { Text } = Typography
 
 const MainLayout: React.FC = () => {
   const { t, i18n } = useTranslation('layout')
@@ -28,22 +29,66 @@ const MainLayout: React.FC = () => {
   const setLanguage = useAppStore((state) => state.setLanguage)
 
   const selectedKeys = useMemo(() => {
-    if (location.pathname.startsWith('/dashboard')) return ['dashboard']
-    if (location.pathname.startsWith('/list')) return ['list']
+    if (location.pathname === '/projects' || location.pathname.startsWith('/projects/')) return ['projects']
+    if (location.pathname.startsWith('/assets')) return ['assets']
+    if (location.pathname.startsWith('/prompts')) return ['prompts']
+    if (location.pathname.startsWith('/files')) return ['files']
     if (location.pathname.startsWith('/settings')) return ['settings']
     return []
   }, [location.pathname])
 
+  const breadcrumbItems = useMemo(() => {
+    const path = location.pathname.replace(/^\/+/, '').split('/').filter(Boolean)
+    if (path.length === 0) return [{ title: t('title') }]
+    const items: { title: React.ReactNode; key: string }[] = []
+    const pathLabels: Record<string, string> = {
+      projects: '项目列表',
+      assets: '资产管理',
+      prompts: '提示词模板',
+      files: '文件管理',
+      settings: t('menu.settings'),
+      chapters: '章节管理',
+      studio: '分镜工作室',
+      editor: '视频剪辑',
+    }
+    let href = ''
+    path.forEach((segment, i) => {
+      href += `/${segment}`
+      const isLast = i === path.length - 1
+      let label = pathLabels[segment]
+      if (label === undefined) {
+        if (path[0] === 'projects' && i === 1) label = '项目工作台'
+        else if (path[2] === 'chapters' && i === 3) label = '章节'
+        else label = segment
+      }
+      items.push({
+        key: href,
+        title: isLast ? label : <Link to={href}>{label}</Link>,
+      })
+    })
+    return items
+  }, [location.pathname, t])
+
   const menuItems = [
     {
-      key: 'dashboard',
-      icon: <PieChartOutlined />,
-      label: <Link to="/dashboard">{t('menu.dashboard')}</Link>,
+      key: 'projects',
+      icon: <FolderOutlined />,
+      label: <Link to="/projects">项目列表</Link>,
     },
     {
-      key: 'list',
-      icon: <UnorderedListOutlined />,
-      label: <Link to="/list">{t('menu.list')}</Link>,
+      key: 'assets',
+      icon: <PictureOutlined />,
+      label: <Link to="/assets">资产管理</Link>,
+    },
+    {
+      key: 'prompts',
+      icon: <FileTextOutlined />,
+      label: <Link to="/prompts">提示词模板</Link>,
+    },
+    {
+      key: 'files',
+      icon: <InboxOutlined />,
+      label: <Link to="/files">文件管理</Link>,
     },
     {
       key: 'settings',
@@ -71,33 +116,40 @@ const MainLayout: React.FC = () => {
   ]
 
   return (
-    <Layout className="min-h-screen">
+    <Layout
+      style={{
+        height: '100vh',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'row',
+      }}
+    >
       <Sider
         trigger={null}
         collapsible
         collapsed={collapsed}
         width={220}
         style={{
+          flexShrink: 0,
           background: token.colorBgContainer,
           borderRight: `1px solid ${token.colorBorderSecondary}`,
+          overflow: 'auto',
         }}
       >
         <div className="flex items-center h-16 px-4 border-b border-solid" style={{ borderColor: token.colorBorderSecondary }}>
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-blue-500 flex items-center justify-center text-white font-bold">
-              J
-            </div>
+          <Link to="/projects" className="flex items-center gap-2 min-w-0">
+            <img src="/logo.svg" alt="Jellyfish" className="w-8 h-8 shrink-0" />
             {!collapsed && (
-              <div>
-                <div className="text-base font-semibold text-gray-900">
+              <div className="min-w-0">
+                <div className="text-base font-semibold text-gray-900 truncate">
                   {t('title')}
                 </div>
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-gray-500 truncate">
                   {t('subtitle')}
                 </div>
               </div>
             )}
-          </div>
+          </Link>
         </div>
 
         <Menu
@@ -108,24 +160,35 @@ const MainLayout: React.FC = () => {
         />
       </Sider>
 
-      <Layout>
+      <Layout
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
         <Header
           className="flex items-center justify-between px-4"
           style={{
+            flexShrink: 0,
             background: token.colorBgContainer,
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
-          <Space size="large">
+          <Space size="middle" className="flex-1 min-w-0">
             <span
-              className="cursor-pointer text-xl"
+              className="cursor-pointer text-xl shrink-0"
               onClick={toggleCollapsed}
             >
               {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </span>
-            <Text className="hidden md:inline-block font-medium text-gray-800">
-              {t('welcome')}
-            </Text>
+            <Breadcrumb
+              items={breadcrumbItems}
+              className="hidden sm:block"
+              style={{ lineHeight: '32px' }}
+            />
           </Space>
 
           <Space size="middle">
@@ -164,12 +227,17 @@ const MainLayout: React.FC = () => {
 
         <Content
           style={{
-            margin: 16,
-            padding: 16,
+            margin: 0,
+            padding: 5,
             background: token.colorBgLayout,
+            flex: 1,
+            minHeight: 0,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
-          <div className="max-w-7xl mx-auto">
+          <div className="w-full h-full min-h-0 overflow-hidden flex flex-col">
             <Outlet />
           </div>
         </Content>

@@ -1,31 +1,133 @@
 import { http, HttpResponse } from 'msw'
-import type { DemoItem } from '../services/exampleApi'
+import type { Project } from './data'
+import {
+  assets,
+  chapters,
+  files,
+  projects as initialProjects,
+  promptTemplates,
+  shotDetails,
+  shots,
+  timelineClips,
+} from './data'
 
-const demoList: DemoItem[] = [
-  {
-    id: '1',
-    name: 'Mock 任务一',
-    status: 'active',
-    createdAt: '2024-01-15',
-  },
-  {
-    id: '2',
-    name: 'Mock 任务二',
-    status: 'inactive',
-    createdAt: '2024-01-20',
-  },
-  {
-    id: '3',
-    name: 'Mock 任务三',
-    status: 'active',
-    createdAt: '2024-02-01',
-  },
-]
+// 可变的项目列表，支持创建/编辑/删除（会话内生效）
+let projectsList: Project[] = [...initialProjects]
+
+function nextProjectId(): string {
+  const max = projectsList.reduce((m, p) => {
+    const n = parseInt(p.id.replace(/\D/g, ''), 10)
+    return isNaN(n) ? m : Math.max(m, n)
+  }, 0)
+  return `p${max + 1}`
+}
 
 export const handlers = [
-  // 示例列表接口
-  http.get('/api/demo/list', () => {
-    return HttpResponse.json(demoList, { status: 200 })
+  // 项目列表
+  http.get('/api/projects', () => {
+    return HttpResponse.json(projectsList, { status: 200 })
+  }),
+
+  // 单个项目详情
+  http.get('/api/projects/:projectId', ({ params }) => {
+    const { projectId } = params as { projectId: string }
+    const project = projectsList.find((p) => p.id === projectId)
+    if (!project) {
+      return HttpResponse.json({ message: '项目不存在' }, { status: 404 })
+    }
+    return HttpResponse.json(project, { status: 200 })
+  }),
+
+  // 创建项目
+  http.post('/api/projects', async ({ request }) => {
+    const body = (await request.json()) as Partial<Project> & { name: string; description?: string; style?: string; seed?: number; unifyStyle?: boolean }
+    const id = nextProjectId()
+    const now = new Date().toISOString().slice(0, 16).replace('T', ' ')
+    const newProject: Project = {
+      id,
+      name: body.name ?? '未命名项目',
+      description: body.description ?? '',
+      style: (body.style as Project['style']) ?? '现实主义',
+      seed: typeof body.seed === 'number' ? body.seed : Math.floor(Math.random() * 99999),
+      unifyStyle: body.unifyStyle ?? true,
+      progress: 0,
+      stats: { chapters: 0, roles: 0, scenes: 0, props: 0 },
+      updatedAt: now,
+    }
+    projectsList = [...projectsList, newProject]
+    return HttpResponse.json(newProject, { status: 201 })
+  }),
+
+  // 更新项目
+  http.put('/api/projects/:projectId', async ({ params, request }) => {
+    const { projectId } = params as { projectId: string }
+    const idx = projectsList.findIndex((p) => p.id === projectId)
+    if (idx === -1) return HttpResponse.json({ message: '项目不存在' }, { status: 404 })
+    const body = (await request.json()) as Partial<Project>
+    const now = new Date().toISOString().slice(0, 16).replace('T', ' ')
+    projectsList = projectsList.map((p, i) =>
+      i === idx
+        ? { ...p, ...body, id: p.id, updatedAt: now }
+        : p
+    )
+    return HttpResponse.json(projectsList[idx], { status: 200 })
+  }),
+
+  // 删除项目
+  http.delete('/api/projects/:projectId', ({ params }) => {
+    const { projectId } = params as { projectId: string }
+    const idx = projectsList.findIndex((p) => p.id === projectId)
+    if (idx === -1) return HttpResponse.json({ message: '项目不存在' }, { status: 404 })
+    projectsList = projectsList.filter((p) => p.id !== projectId)
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // 项目下章节列表
+  http.get('/api/projects/:projectId/chapters', ({ params }) => {
+    const { projectId } = params as { projectId: string }
+    const list = chapters.filter((c) => c.projectId === projectId)
+    return HttpResponse.json(list, { status: 200 })
+  }),
+
+  // 某章节的分镜列表
+  http.get('/api/chapters/:chapterId/shots', ({ params }) => {
+    const { chapterId } = params as { chapterId: string }
+    const list = shots.filter((s) => s.chapterId === chapterId)
+    return HttpResponse.json(list, { status: 200 })
+  }),
+
+  // 单个分镜详情（镜头属性）
+  http.get('/api/shots/:shotId', ({ params }) => {
+    const { shotId } = params as { shotId: string }
+    const detail = shotDetails.find((s) => s.id === shotId)
+    if (!detail) {
+      return HttpResponse.json({ message: '分镜不存在' }, { status: 404 })
+    }
+    return HttpResponse.json(detail, { status: 200 })
+  }),
+
+  // 资产列表（可通过查询参数过滤）
+  http.get('/api/assets', ({ request }) => {
+    const url = new URL(request.url)
+    const type = url.searchParams.get('type')
+    const list = type ? assets.filter((a) => a.type === type) : assets
+    return HttpResponse.json(list, { status: 200 })
+  }),
+
+  // 提示词模板列表
+  http.get('/api/prompts/templates', () => {
+    return HttpResponse.json(promptTemplates, { status: 200 })
+  }),
+
+  // 文件列表
+  http.get('/api/files', () => {
+    return HttpResponse.json(files, { status: 200 })
+  }),
+
+  // 某项目的时间线数据
+  http.get('/api/projects/:projectId/timeline', () => {
+    return HttpResponse.json(timelineClips, { status: 200 })
   }),
 ]
+
 

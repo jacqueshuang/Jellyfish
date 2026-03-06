@@ -21,10 +21,10 @@ dependencies:
     specifier: ^7.2.1
     version: 7.2.1
   react:
-    specifier: ^18.2.0
+    specifier: 18.2.0
     version: 18.2.0
   react-dom:
-    specifier: ^18.2.0
+    specifier: 18.2.0
     version: 18.2.0(react@18.2.0)
   react-i18next:
     specifier: ^15.0.1

@@ -11,7 +11,6 @@ import { useAppStore } from './store/useAppStore'
 
 const RootApp: React.FC = () => {
   const language = useAppStore((state) => state.language)
-
   const antdLocale = language === 'en-US' ? enUS : zhCN
 
   return (
@@ -29,34 +28,57 @@ const RootApp: React.FC = () => {
   )
 }
 
-async function enableMocking() {
-  if (!import.meta.env.DEV) {
-    return
+class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null as Error | null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
   }
 
-  try {
-    const { worker } = await import('./mocks/browser')
-
-    await worker.start({
-      onUnhandledRequest: 'bypass',
-    })
-  } catch (error) {
-    // 本地开发环境下，如果 MSW 初始化失败，不阻塞应用渲染
-    // 只在控制台输出错误，方便排查
-    // eslint-disable-next-line no-console
-    console.error('Failed to start MSW, continue without mocks:', error)
+  render() {
+    if (this.state.hasError && this.state.error) {
+      return (
+        <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
+          <h2>页面加载出错</h2>
+          <pre style={{ color: '#c00', overflow: 'auto' }}>
+            {this.state.error.message}
+          </pre>
+        </div>
+      )
+    }
+    return this.props.children
   }
 }
 
-async function bootstrap() {
-  await enableMocking()
-
-  ReactDOM.createRoot(document.getElementById('root')!).render(
+function renderApp() {
+  const root = document.getElementById('root')
+  if (!root) return
+  ReactDOM.createRoot(root).render(
     <React.StrictMode>
-      <RootApp />
+      <AppErrorBoundary>
+        <RootApp />
+      </AppErrorBoundary>
     </React.StrictMode>,
   )
 }
 
-void bootstrap()
+// 先立即渲染，避免 MSW 启动阻塞导致白屏
+renderApp()
+
+async function enableMocking() {
+  if (import.meta.env.VITE_USE_MOCK !== 'true') {
+    return
+  }
+  try {
+    const { worker } = await import('./mocks/browser')
+    await worker.start({ onUnhandledRequest: 'bypass' })
+  } catch (error) {
+    console.error('MSW start failed:', error)
+  }
+}
+
+void enableMocking()
 

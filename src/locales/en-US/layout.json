@@ -1,10 +1,8 @@
 {
-  "title": "Jellyfish Admin",
-  "subtitle": "Vite + React scaffold",
-  "welcome": "Welcome to Jellyfish frontend scaffold",
+  "title": "Jellyfish",
+  "subtitle": "AI Short-form Studio",
+  "welcome": "Welcome to Jellyfish",
   "menu": {
-    "dashboard": "Dashboard",
-    "list": "List",
     "settings": "Settings"
   },
   "user": {

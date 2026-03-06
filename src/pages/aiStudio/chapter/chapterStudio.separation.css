@@ -1,0 +1,242 @@
+/* Chapter Shooting Studio – separation & hierarchy pass (scoped) */
+
+.cs-studio {
+  --cs-left-bg: #f8f9fc;
+  --cs-main-bg: #ffffff;
+  --cs-right-bg: #f9fafc;
+  --cs-divider: #e2e8f0;
+  --cs-divider-strong: #cbd5e1;
+  --cs-text: #1f2937;
+  --cs-text-2: #4b5563;
+  --cs-text-3: #6b7280;
+  --cs-primary: #3b82f6;
+  --cs-success: #10b981;
+  --cs-warn: #f59e0b;
+  --cs-muted: #9ca3af;
+
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: var(--cs-text);
+  background: linear-gradient(180deg, #f3f6ff 0%, #eef2f7 100%);
+}
+
+.cs-resizing * {
+  transition: none !important;
+}
+.cs-resizing .cs-left,
+.cs-resizing .cs-right,
+.cs-resizing .cs-main {
+  user-select: none;
+}
+
+.cs-topbar {
+  background: #fff;
+  border-bottom: 1px solid var(--cs-divider);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+}
+
+.cs-left {
+  background: var(--cs-left-bg) !important;
+  border-right: 1px solid var(--cs-divider);
+}
+
+.cs-main {
+  background: var(--cs-main-bg);
+}
+
+.cs-right {
+  background: var(--cs-right-bg) !important;
+  border-left: 2px solid var(--cs-divider-strong);
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.06);
+}
+
+.cs-sep {
+  width: 10px;
+  cursor: col-resize;
+  position: relative;
+  flex-shrink: 0;
+  background: transparent;
+}
+.cs-sep::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--cs-divider);
+}
+.cs-sep.cs-sep-strong::before {
+  width: 2px;
+  background: var(--cs-divider-strong);
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+}
+
+/* Antd cards inside studio: lighter, clearer containers */
+.cs-studio .ant-card {
+  border-radius: 12px;
+}
+
+.cs-studio .ant-card .ant-card-head {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.cs-studio .ant-card .ant-card-head-title {
+  color: var(--cs-text);
+}
+
+.cs-studio .ant-card .ant-card-body {
+  color: var(--cs-text);
+}
+
+/* Shot list item */
+.cs-shot-item {
+  position: relative;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+.cs-shot-item:hover {
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+.cs-shot-item.cs-shot-selected {
+  background: #e0f2fe;
+  border-color: rgba(59, 130, 246, 0.35);
+}
+.cs-shot-item.cs-shot-selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--cs-primary);
+}
+.cs-shot-item.cs-shot-active {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.cs-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+  box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+  animation: cs-breathe 1.6s ease-in-out infinite;
+}
+.cs-dot.cs-ready {
+  background: var(--cs-success);
+}
+.cs-dot.cs-pending {
+  background: var(--cs-muted);
+}
+.cs-dot.cs-generating {
+  background: var(--cs-warn);
+  animation-duration: 1.1s;
+}
+@keyframes cs-breathe {
+  0%, 100% { transform: scale(0.88); opacity: 0.75; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+/* Main preview focus */
+.cs-preview-card .ant-card-body {
+  padding: 16px;
+}
+.cs-player-shell {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 10px;
+  background: #fdfdfd;
+}
+
+.cs-subtitle {
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.64);
+  color: rgba(255, 255, 255, 0.92);
+}
+.cs-subtitle .cs-sub-line {
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* Inspector spacing + group card feel */
+.cs-inspector {
+  padding: 20px 22px;
+}
+.cs-inspector-header {
+  padding: 14px 18px;
+  background: #fff;
+  border-bottom: 1px solid var(--cs-divider);
+}
+.cs-group {
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  border: 1px solid #eef2f7;
+}
+.cs-group + .cs-group {
+  margin-top: 16px;
+}
+.cs-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--cs-text);
+  margin-bottom: 10px;
+}
+.cs-hint {
+  color: var(--cs-text-3);
+  font-size: 12px;
+}
+
+/* Make controls breathe */
+.cs-studio .ant-tabs-left > .ant-tabs-nav {
+  width: 120px;
+}
+.cs-studio .ant-tabs-left > .ant-tabs-nav .ant-tabs-tab {
+  margin: 6px 0 !important;
+  padding: 10px 10px !important;
+  border-radius: 10px;
+}
+.cs-studio .ant-tabs .ant-tabs-tab.ant-tabs-tab-active {
+  background: rgba(59, 130, 246, 0.10);
+}
+
+.cs-studio .ant-btn-primary {
+  background: var(--cs-primary);
+  border-color: var(--cs-primary);
+}
+
+/* Right collapsed strip */
+.cs-right-strip {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 160px;
+  background: #fff;
+  border: 1px solid var(--cs-divider);
+  border-right: 0;
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+  box-shadow: -6px 0 16px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+}
+.cs-right-strip span {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+  color: var(--cs-text-2);
+  font-weight: 600;
+}
+

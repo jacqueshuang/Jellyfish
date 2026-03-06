@@ -23,17 +23,18 @@ http.interceptors.response.use(
   },
 )
 
-export const get = <T = unknown>(url: string, config?: AxiosRequestConfig) =>
-  http.get<T>(url, config)
+// 响应拦截器已返回 response.data，此处声明为 Promise<T>
+export const get = <T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T> =>
+  http.get<T>(url, config) as Promise<T>
 
-export const post = <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
-  http.post<T>(url, data, config)
+export const post = <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> =>
+  http.post<T>(url, data, config) as Promise<T>
 
-export const put = <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
-  http.put<T>(url, data, config)
+export const put = <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> =>
+  http.put<T>(url, data, config) as Promise<T>
 
-export const del = <T = unknown>(url: string, config?: AxiosRequestConfig) =>
-  http.delete<T>(url, config)
+export const del = <T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T> =>
+  http.delete<T>(url, config) as Promise<T>
 
 export default http
 

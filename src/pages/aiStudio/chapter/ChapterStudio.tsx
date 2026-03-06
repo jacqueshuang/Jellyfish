@@ -1,0 +1,1770 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Badge,
+  Button,
+  Card,
+  Divider,
+  Dropdown,
+  Input,
+  Layout,
+  Modal,
+  Radio,
+  Segmented,
+  Select,
+  Slider,
+  Space,
+  Switch,
+  Tabs,
+  Tag,
+  Tooltip,
+  message,
+} from 'antd'
+import {
+  AppstoreOutlined,
+  ArrowLeftOutlined,
+  CaretLeftOutlined,
+  CaretRightOutlined,
+  BulbOutlined,
+  CameraOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CustomerServiceOutlined,
+  DeleteOutlined,
+  DoubleLeftOutlined,
+  DoubleRightOutlined,
+  DownOutlined,
+  EditOutlined,
+  ExportOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  FileExcelOutlined,
+  FilePdfOutlined,
+  FileTextOutlined,
+  LinkOutlined,
+  MergeCellsOutlined,
+  PauseCircleOutlined,
+  PictureOutlined,
+  PlayCircleOutlined,
+  SaveOutlined,
+  ScissorOutlined,
+  SettingOutlined,
+  SoundOutlined,
+  TagOutlined,
+  ToolOutlined,
+  VideoCameraOutlined,
+  ThunderboltOutlined,
+  UploadOutlined,
+  VideoCameraAddOutlined,
+} from '@ant-design/icons'
+import { useParams, Link } from 'react-router-dom'
+import api from '../../../services/aiStudioApi'
+import type { Chapter, Shot, ShotDetail } from '../../../mocks/data'
+import './chapterStudio.separation.css'
+
+const { Sider, Content } = Layout
+const { TextArea } = Input
+
+type InspectorMode = 'push' | 'overlay'
+type ShotFilter = 'all' | 'pending' | 'ready' | 'hidden' | 'problem'
+
+type StudioShot = Shot & {
+  hidden?: boolean
+  hasProblem?: boolean
+  hasSpeech?: boolean
+  hasMusic?: boolean
+}
+
+type LayoutPrefs = {
+  leftWidth: number
+  rightWidth: number
+  inspectorOpen: boolean
+  inspectorMode: InspectorMode
+  autoOpenInspector: boolean
+  timelineCollapsed: boolean
+}
+
+const LAYOUT_STORAGE_KEY = 'jellyfish_chapter_studio_layout_v1'
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n))
+}
+
+function reorder<T>(list: T[], startIndex: number, endIndex: number) {
+  const result = [...list]
+  const [removed] = result.splice(startIndex, 1)
+  result.splice(endIndex, 0, removed)
+  return result
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName.toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  if (target.isContentEditable) return true
+  return Boolean(target.closest('[contenteditable="true"]'))
+}
+
+function useLocalStoragePrefs() {
+  const [prefs, setPrefs] = useState<LayoutPrefs>(() => {
+    try {
+      const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY)
+      if (!raw) {
+        return {
+          leftWidth: 280,
+          rightWidth: 420,
+          inspectorOpen: false,
+          inspectorMode: 'push',
+          autoOpenInspector: true,
+          timelineCollapsed: false,
+        }
+      }
+      const parsed = JSON.parse(raw) as Partial<LayoutPrefs>
+      return {
+        leftWidth: typeof parsed.leftWidth === 'number' ? parsed.leftWidth : 280,
+        rightWidth: typeof parsed.rightWidth === 'number' ? parsed.rightWidth : 420,
+        inspectorOpen: typeof parsed.inspectorOpen === 'boolean' ? parsed.inspectorOpen : false,
+        inspectorMode: parsed.inspectorMode === 'overlay' ? 'overlay' : 'push',
+        autoOpenInspector: typeof parsed.autoOpenInspector === 'boolean' ? parsed.autoOpenInspector : true,
+        timelineCollapsed: typeof parsed.timelineCollapsed === 'boolean' ? parsed.timelineCollapsed : false,
+      }
+    } catch {
+      return {
+        leftWidth: 280,
+        rightWidth: 420,
+        inspectorOpen: false,
+        inspectorMode: 'push',
+        autoOpenInspector: true,
+        timelineCollapsed: false,
+      }
+    }
+  })
+
+  useEffect(() => {
+    window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(prefs))
+  }, [prefs])
+
+  return [prefs, setPrefs] as const
+}
+
+const ChapterStudio: React.FC = () => {
+  const { projectId, chapterId } = useParams<{
+    projectId?: string
+    chapterId?: string
+  }>()
+  const [chapter, setChapter] = useState<Chapter | null>(null)
+  const [shots, setShots] = useState<StudioShot[]>([])
+  const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
+  const [selectedShotIds, setSelectedShotIds] = useState<string[]>([])
+  const lastSelectedIndexRef = useRef<number>(-1)
+  const [shotDetail, setShotDetail] = useState<ShotDetail | null>(null)
+  const [loadingShots, setLoadingShots] = useState(true)
+  const [loadingDetail, setLoadingDetail] = useState(false)
+  const [prefs, setPrefs] = useLocalStoragePrefs()
+  const [generating, setGenerating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const saveTimerRef = useRef<number | null>(null)
+
+  const [frameTab, setFrameTab] = useState<'head' | 'keyframes' | 'tail' | 'compare'>('keyframes')
+  const [playbackRate, setPlaybackRate] = useState(1)
+  const [loopCurrent, setLoopCurrent] = useState(false)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [videoDuration, setVideoDuration] = useState(0)
+  const [videoTime, setVideoTime] = useState(0)
+
+  const [filter, setFilter] = useState<ShotFilter>('all')
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportFormat, setExportFormat] = useState<'excel' | 'json' | 'pdf'>('excel')
+  const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
+  const [editingTitleValue, setEditingTitleValue] = useState('')
+  const [draggingShotId, setDraggingShotId] = useState<string | null>(null)
+  const [dragOverShotId, setDragOverShotId] = useState<string | null>(null)
+  const [isResizing, setIsResizing] = useState(false)
+
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const dragStateRef = useRef<null | { type: 'left' | 'right'; startX: number; startLeft: number; startRight: number }>(null)
+  const resizeRafRef = useRef<number | null>(null)
+  const pendingResizeRef = useRef<null | { leftWidth?: number; rightWidth?: number }>(null)
+
+  const loadShots = async () => {
+    if (!chapterId) return
+    setLoadingShots(true)
+    try {
+      const list = await api.shots.list(chapterId)
+      const arr = Array.isArray(list) ? list : []
+      // 给分镜补充一些“工作台态”的展示字段（后续可由后端返回）
+      const enriched: StudioShot[] = arr
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .map((s, idx) => ({
+          ...s,
+          hidden: false,
+          hasProblem: idx === 4,
+          hasSpeech: true,
+          hasMusic: idx % 3 !== 0,
+        }))
+
+      setShots(enriched)
+
+      if (!selectedShotId) {
+        const firstUnfinished = enriched.find((s) => !s.hidden && s.status !== 'ready')
+        const firstVisible = enriched.find((s) => !s.hidden)
+        setSelectedShotId((firstUnfinished ?? firstVisible ?? enriched[0])?.id ?? null)
+      }
+    } catch {
+      message.error('加载分镜失败')
+    } finally {
+      setLoadingShots(false)
+    }
+  }
+
+  const loadChapter = async () => {
+    if (!projectId || !chapterId) return
+    try {
+      const list = await api.chapters.list(projectId)
+      const found = Array.isArray(list) ? list.find((c) => c.id === chapterId) ?? null : null
+      setChapter(found)
+    } catch {
+      // 章节信息仅用于标题展示，失败不阻断工作台
+      setChapter(null)
+    }
+  }
+
+  useEffect(() => {
+    void loadShots()
+    void loadChapter()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapterId, projectId])
+
+  useEffect(() => {
+    if (!selectedShotId) {
+      setShotDetail(null)
+      return
+    }
+    setLoadingDetail(true)
+    api.shots
+      .get(selectedShotId)
+      .then(setShotDetail)
+      .catch(() => message.error('加载分镜详情失败'))
+      .finally(() => setLoadingDetail(false))
+  }, [selectedShotId])
+
+  useEffect(() => {
+    // 选中分镜时同步多选的“主选中项”
+    if (!selectedShotId) return
+    if (selectedShotIds.includes(selectedShotId)) return
+    setSelectedShotIds([selectedShotId])
+  }, [selectedShotId, selectedShotIds])
+
+  const selectedShot = useMemo(() => shots.find((s) => s.id === selectedShotId) ?? null, [shots, selectedShotId])
+
+  // 选中分镜后若开启自动展开属性面板：默认展开（尤其是未就绪分镜）
+  useEffect(() => {
+    if (!selectedShot) return
+    if (!prefs.autoOpenInspector) return
+    if (prefs.inspectorOpen) return
+    // “若无视频则自动展开”：这里用 status !== ready 作为近似判定
+    if (selectedShot.status !== 'ready') {
+      setPrefs((p) => ({ ...p, inspectorOpen: true }))
+    }
+  }, [prefs.autoOpenInspector, prefs.inspectorOpen, selectedShot, setPrefs])
+
+  // 节流保存（3–5 秒）：当 shotDetail 变化时触发“保存中→已保存”
+  useEffect(() => {
+    if (!shotDetail) return
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current)
+    }
+    setSaving(true)
+    saveTimerRef.current = window.setTimeout(() => {
+      setSaving(false)
+      saveTimerRef.current = null
+    }, 3200)
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+  }, [shotDetail])
+
+  // 播放器：同步时间与状态
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    const onPlay = () => setIsPlaying(true)
+    const onPause = () => setIsPlaying(false)
+    const onTimeUpdate = () => setVideoTime(v.currentTime || 0)
+    const onLoaded = () => setVideoDuration(v.duration || 0)
+    v.addEventListener('play', onPlay)
+    v.addEventListener('pause', onPause)
+    v.addEventListener('timeupdate', onTimeUpdate)
+    v.addEventListener('loadedmetadata', onLoaded)
+    return () => {
+      v.removeEventListener('play', onPlay)
+      v.removeEventListener('pause', onPause)
+      v.removeEventListener('timeupdate', onTimeUpdate)
+      v.removeEventListener('loadedmetadata', onLoaded)
+    }
+  }, [selectedShotId])
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    v.playbackRate = playbackRate
+  }, [playbackRate])
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    v.loop = loopCurrent
+  }, [loopCurrent])
+
+  // 快捷键：←/→ 切换分镜，Space 播放暂停，P/Ctrl+I 面板，H 隐藏，M 合并，Ctrl/Cmd+Enter 保存并生成
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return
+      const key = e.key.toLowerCase()
+
+      if (key === 'p' || (key === 'i' && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault()
+        setPrefs((p) => ({ ...p, inspectorOpen: !p.inspectorOpen }))
+        return
+      }
+
+      if (key === ' ') {
+        e.preventDefault()
+        const v = videoRef.current
+        if (!v) return
+        if (v.paused) void v.play()
+        else v.pause()
+        return
+      }
+
+      if (key === 'arrowleft' || key === 'arrowright') {
+        e.preventDefault()
+        const visible = shots.filter((s) => !s.hidden)
+        const idx = visible.findIndex((s) => s.id === selectedShotId)
+        if (idx === -1) return
+        const next = key === 'arrowleft' ? visible[idx - 1] : visible[idx + 1]
+        if (next) setSelectedShotId(next.id)
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && key === 'enter') {
+        e.preventDefault()
+        message.success('已保存草稿（Mock）')
+        setGenerating(true)
+        window.setTimeout(() => {
+          setGenerating(false)
+          message.success('已开始生成（Mock）')
+        }, 650)
+        return
+      }
+
+      if (key === 'h') {
+        e.preventDefault()
+        if (!selectedShotId) return
+        setShots((prev) =>
+          prev.map((s) => (s.id === selectedShotId ? { ...s, hidden: !s.hidden } : s)),
+        )
+        return
+      }
+
+      if (key === 'm') {
+        e.preventDefault()
+        if (selectedShotIds.length < 2) {
+          message.info('请先多选至少 2 个分镜再合并')
+          return
+        }
+        Modal.confirm({
+          title: `合并 ${selectedShotIds.length} 个分镜？`,
+          content: '将它们合并为一个新的分镜（Mock 行为）。',
+          okText: '合并',
+          cancelText: '取消',
+          onOk: () => {
+            message.success('已合并（Mock）')
+          },
+        })
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selectedShotId, selectedShotIds.length, shots, setPrefs])
+
+  const statusTag = (status: Shot['status']) => {
+    const map = { pending: 'default', generating: 'processing', ready: 'success' }
+    const text = { pending: '待生成', generating: '生成中', ready: '已就绪' }
+    return <Tag color={map[status]}>{text[status]}</Tag>
+  }
+
+  const statusDotClass = (status: Shot['status']) => {
+    if (status === 'ready') return 'cs-ready'
+    if (status === 'generating') return 'cs-generating'
+    return 'cs-pending'
+  }
+
+  const chapterTitle = useMemo(() => {
+    if (!chapter) return '章节拍摄工作台'
+    return `第${chapter.index}章 · ${chapter.title.replace(/^第\d+[集章：:\s]*/g, '').trim() || chapter.title}`
+  }, [chapter])
+
+  const filteredShots = useMemo(() => {
+    const list = shots.slice().sort((a, b) => a.index - b.index)
+    switch (filter) {
+      case 'pending':
+        return list.filter((s) => !s.hidden && s.status !== 'ready')
+      case 'ready':
+        return list.filter((s) => !s.hidden && s.status === 'ready')
+      case 'hidden':
+        return list.filter((s) => Boolean(s.hidden))
+      case 'problem':
+        return list.filter((s) => !s.hidden && Boolean(s.hasProblem))
+      default:
+        return list
+    }
+  }, [filter, shots])
+
+  const multiToolbarVisible = selectedShotIds.length > 1
+
+  const handleSelectShot = (shotId: string, indexInFiltered: number, e: React.MouseEvent) => {
+    setSelectedShotId(shotId)
+    const isRange = e.shiftKey && lastSelectedIndexRef.current >= 0
+    const isToggle = e.ctrlKey || e.metaKey
+
+    if (isRange) {
+      const start = Math.min(lastSelectedIndexRef.current, indexInFiltered)
+      const end = Math.max(lastSelectedIndexRef.current, indexInFiltered)
+      const rangeIds = filteredShots.slice(start, end + 1).map((s) => s.id)
+      setSelectedShotIds(Array.from(new Set([...selectedShotIds, ...rangeIds])))
+      return
+    }
+
+    if (isToggle) {
+      setSelectedShotIds((prev) => (prev.includes(shotId) ? prev.filter((id) => id !== shotId) : [...prev, shotId]))
+      lastSelectedIndexRef.current = indexInFiltered
+      return
+    }
+
+    setSelectedShotIds([shotId])
+    lastSelectedIndexRef.current = indexInFiltered
+  }
+
+  const matchesFilter = (s: StudioShot, f: ShotFilter) => {
+    switch (f) {
+      case 'pending':
+        return !s.hidden && s.status !== 'ready'
+      case 'ready':
+        return !s.hidden && s.status === 'ready'
+      case 'hidden':
+        return Boolean(s.hidden)
+      case 'problem':
+        return !s.hidden && Boolean(s.hasProblem)
+      default:
+        return true
+    }
+  }
+
+  const reorderWithinFilter = (sourceId: string, destId: string) => {
+    if (sourceId === destId) return
+    setShots((prev) => {
+      const ordered = prev.slice().sort((a, b) => a.index - b.index)
+      const subset = ordered.filter((s) => matchesFilter(s, filter))
+      const sourceIndex = subset.findIndex((s) => s.id === sourceId)
+      const destIndex = subset.findIndex((s) => s.id === destId)
+      if (sourceIndex === -1 || destIndex === -1) return prev
+      const movedSubset = reorder(subset, sourceIndex, destIndex)
+      const movedQueue = [...movedSubset]
+      const replaced = ordered.map((s) => (matchesFilter(s, filter) ? (movedQueue.shift() as StudioShot) : s))
+      return replaced.map((s, idx) => ({ ...s, index: idx + 1 }))
+    })
+  }
+
+  const beginResize = (type: 'left' | 'right', e: React.PointerEvent) => {
+    if (!containerRef.current) return
+    const startX = e.clientX
+    dragStateRef.current = {
+      type,
+      startX,
+      startLeft: prefs.leftWidth,
+      startRight: prefs.rightWidth,
+    }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    setIsResizing(true)
+  }
+
+  const onResizeMove = (e: React.PointerEvent) => {
+    const st = dragStateRef.current
+    if (!st) return
+    const dx = e.clientX - st.startX
+    const minLeft = 240
+    const maxLeft = 360
+    const minRight = 360
+    const maxRight = 720
+    if (st.type === 'left') {
+      pendingResizeRef.current = { leftWidth: clamp(st.startLeft + dx, minLeft, maxLeft) }
+    } else {
+      // right：推挤/覆盖都复用 width 偏好
+      pendingResizeRef.current = { rightWidth: clamp(st.startRight - dx, minRight, maxRight) }
+    }
+
+    if (resizeRafRef.current) return
+    resizeRafRef.current = window.requestAnimationFrame(() => {
+      const pending = pendingResizeRef.current
+      pendingResizeRef.current = null
+      resizeRafRef.current = null
+      if (!pending) return
+      setPrefs((p) => ({
+        ...p,
+        ...(typeof pending.leftWidth === 'number' ? { leftWidth: pending.leftWidth } : null),
+        ...(typeof pending.rightWidth === 'number' ? { rightWidth: pending.rightWidth } : null),
+      }))
+    })
+  }
+
+  const endResize = () => {
+    dragStateRef.current = null
+    pendingResizeRef.current = null
+    if (resizeRafRef.current) {
+      window.cancelAnimationFrame(resizeRafRef.current)
+      resizeRafRef.current = null
+    }
+    setIsResizing(false)
+  }
+
+  const shotContextMenu = (shot: StudioShot) => ([
+    {
+      key: 'copy',
+      icon: <LinkOutlined />,
+      label: '复制分镜',
+      onClick: () => message.success('已复制（Mock）'),
+    },
+    {
+      key: 'insert_after',
+      icon: <VideoCameraAddOutlined />,
+      label: '在后插入新分镜',
+      onClick: () => message.success('已插入（Mock）'),
+    },
+    {
+      key: 'transition',
+      icon: <ScissorOutlined />,
+      label: '设为转场点',
+      onClick: () => message.success('已设置（Mock）'),
+    },
+    { type: 'divider' as const },
+    {
+      key: 'toggle_hide',
+      icon: shot.hidden ? <EyeOutlined /> : <EyeInvisibleOutlined />,
+      label: shot.hidden ? '取消隐藏' : '隐藏',
+      onClick: () => setShots((prev) => prev.map((s) => (s.id === shot.id ? { ...s, hidden: !s.hidden } : s))),
+    },
+    {
+      key: 'delete',
+      icon: <DeleteOutlined />,
+      danger: true,
+      label: '删除',
+      onClick: () =>
+        Modal.confirm({
+          title: '删除分镜？',
+          content: '此操作不可撤销（Mock）。',
+          okText: '删除',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: () => setShots((prev) => prev.filter((s) => s.id !== shot.id)),
+        }),
+    },
+  ])
+
+  const batchMenuItems = [
+    {
+      key: 'merge',
+      icon: <MergeCellsOutlined />,
+      label: '合并',
+      disabled: selectedShotIds.length < 2,
+      onClick: () => {
+        if (selectedShotIds.length < 2) return
+        Modal.confirm({
+          title: `合并 ${selectedShotIds.length} 个分镜？`,
+          okText: '合并',
+          cancelText: '取消',
+          onOk: () => message.success('已合并（Mock）'),
+        })
+      },
+    },
+    {
+      key: 'hide',
+      icon: <EyeInvisibleOutlined />,
+      label: '隐藏',
+      onClick: () => setShots((prev) => prev.map((s) => (selectedShotIds.includes(s.id) ? { ...s, hidden: true } : s))),
+    },
+    {
+      key: 'delete',
+      icon: <DeleteOutlined />,
+      danger: true,
+      label: '删除',
+      onClick: () =>
+        Modal.confirm({
+          title: `删除 ${selectedShotIds.length} 个分镜？`,
+          okText: '删除',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: () => setShots((prev) => prev.filter((s) => !selectedShotIds.includes(s.id))),
+        }),
+    },
+    { type: 'divider' as const },
+    {
+      key: 'generate',
+      icon: <ThunderboltOutlined />,
+      label: '批量生成',
+      onClick: () => {
+        setGenerating(true)
+        window.setTimeout(() => {
+          setGenerating(false)
+          message.success('已开始批量生成（Mock）')
+        }, 800)
+      },
+    },
+  ]
+
+  const toolbarSettingsItems = [
+    {
+      key: 'mode',
+      icon: <AppstoreOutlined />,
+      label: (
+        <div className="flex items-center justify-between gap-3">
+          <span>属性面板模式</span>
+          <Select
+            size="small"
+            value={prefs.inspectorMode}
+            style={{ width: 120 }}
+            onChange={(v) => setPrefs((p) => ({ ...p, inspectorMode: v }))}
+            options={[
+              { value: 'push', label: '推挤模式' },
+              { value: 'overlay', label: '覆盖模式' },
+            ]}
+          />
+        </div>
+      ),
+    },
+    {
+      key: 'autoOpen',
+      icon: <SettingOutlined />,
+      label: (
+        <div className="flex items-center justify-between gap-3">
+          <span>选中分镜自动展开</span>
+          <Switch
+            size="small"
+            checked={prefs.autoOpenInspector}
+            onChange={(v) => setPrefs((p) => ({ ...p, autoOpenInspector: v }))}
+          />
+        </div>
+      ),
+    },
+  ]
+
+  const subtitleLines = useMemo(() => {
+    const dialog = shotDetail?.dialog ?? []
+    if (!selectedShot || dialog.length === 0) return []
+    const dur = Math.max(1, selectedShot.duration || 1)
+    const per = dur / dialog.length
+    return dialog.map((d, i) => ({
+      key: `${selectedShot.id}-${i}`,
+      role: d.role,
+      text: d.text,
+      start: i * per,
+      end: (i + 1) * per,
+    }))
+  }, [selectedShot, shotDetail?.dialog])
+
+  const activeSubtitleIndex = useMemo(() => {
+    if (!selectedShot || subtitleLines.length === 0) return -1
+    const t = videoTime
+    return subtitleLines.findIndex((l) => t >= l.start && t < l.end)
+  }, [selectedShot, subtitleLines, videoTime])
+
+  return (
+    <div className={['cs-studio w-full h-full min-h-0 flex flex-col', isResizing ? 'cs-resizing' : ''].join(' ')} ref={containerRef}>
+      {/* 顶部工具栏（常驻） */}
+      <div
+        className="cs-topbar flex items-center gap-4 px-4 py-3"
+        style={{
+          flexShrink: 0,
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {projectId && (
+            <Link
+              to={`/projects/${projectId}/chapters`}
+              className="text-sm text-gray-600 hover:text-blue-600 flex items-center gap-1 shrink-0"
+            >
+              <ArrowLeftOutlined /> 返回
+            </Link>
+          )}
+          <Divider type="vertical" />
+          <div className="min-w-0">
+            <div className="font-medium text-gray-900 truncate">{chapterTitle}</div>
+            <div className="text-xs text-gray-500">
+              {saving ? (
+                <span className="inline-flex items-center gap-1">
+                  <ClockCircleOutlined /> 自动保存中…
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1">
+                  <CheckCircleOutlined /> 已保存
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 min-w-0 flex items-center justify-center">
+          <Space size="middle" wrap>
+            <Button
+              size="small"
+              type="primary"
+              icon={<ThunderboltOutlined />}
+              onClick={() => message.success('智能精简完成（Mock）')}
+            >
+              智能精简
+            </Button>
+            <Button
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={() => message.success('已提取角色/场景/道具/分镜建议（Mock）')}
+            >
+              智能提取全部
+            </Button>
+            <Dropdown menu={{ items: batchMenuItems }} disabled={selectedShotIds.length === 0}>
+              <Button size="small">
+                批量操作 <DownOutlined />
+              </Button>
+            </Dropdown>
+            <Button size="small" type="primary" icon={<SaveOutlined />} onClick={() => message.success('已保存草稿（Mock）')}>
+              保存草稿
+            </Button>
+            <Button
+              size="small"
+              icon={<PlayCircleOutlined />}
+              onClick={() => message.info('预览整章（Mock：连续播放非隐藏分镜）')}
+            >
+              预览整章
+            </Button>
+            <Button
+              size="small"
+              icon={<ExportOutlined />}
+              onClick={() => setExportModalOpen(true)}
+            >
+              导出分镜表
+            </Button>
+          </Space>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <Dropdown menu={{ items: toolbarSettingsItems }} trigger={['click']}>
+            <Tooltip title="工作台设置">
+              <Button size="small" icon={<SettingOutlined />} />
+            </Tooltip>
+          </Dropdown>
+          <Tooltip title={prefs.inspectorOpen ? '收起属性面板（P / Ctrl/Cmd+I）' : '展开属性面板（P / Ctrl/Cmd+I）'}>
+            <Button
+              size="small"
+              icon={prefs.inspectorOpen ? <DoubleRightOutlined /> : <DoubleLeftOutlined />}
+              onClick={() => setPrefs((p) => ({ ...p, inspectorOpen: !p.inspectorOpen }))}
+            />
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* 三栏动态布局 */}
+      <Layout
+        className="flex-1 min-h-0"
+        style={{
+          background: 'transparent',
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+        onPointerMove={onResizeMove}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+      >
+        {/* 左侧：分镜列表 */}
+        <Sider
+          width={prefs.leftWidth}
+          collapsedWidth={0}
+          className="cs-left flex flex-col"
+          style={{
+            overflow: 'hidden',
+          }}
+        >
+          <div className="cs-group m-3 mb-2 flex flex-col gap-2 min-w-0">
+            <div className="cs-group-title mb-0 flex items-center gap-2 shrink-0">
+              <FileTextOutlined /> 分镜列表
+            </div>
+            <div className="overflow-x-auto min-w-0 -mx-1 px-1">
+              <Segmented
+                size="small"
+                value={filter}
+                onChange={(v) => setFilter(v as ShotFilter)}
+                options={[
+                  { label: '全部', value: 'all' },
+                  { label: '未完成', value: 'pending' },
+                  { label: '已生成', value: 'ready' },
+                  { label: '隐藏', value: 'hidden' },
+                  { label: '有问题', value: 'problem' },
+                ]}
+              />
+            </div>
+          </div>
+
+          {multiToolbarVisible && (
+            <div className="cs-group m-3 mt-0 mb-2">
+              <div className="cs-group-title mb-2 flex items-center gap-2">
+                <AppstoreOutlined /> 批量操作
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-gray-600">已选 {selectedShotIds.length} 项</span>
+              <Button size="small" icon={<MergeCellsOutlined />} disabled={selectedShotIds.length < 2} onClick={() => batchMenuItems[0].onClick?.()}>
+                合并
+              </Button>
+              <Button size="small" icon={<EyeInvisibleOutlined />} onClick={() => batchMenuItems[1].onClick?.()}>
+                隐藏
+              </Button>
+              <Button size="small" icon={<SoundOutlined />} onClick={() => message.success('已批量关闭配乐/对白（Mock）')}>
+                关闭配乐/对白
+              </Button>
+              <Button size="small" icon={<ThunderboltOutlined />} loading={generating} onClick={() => batchMenuItems[4].onClick?.()}>
+                批量生成
+              </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex-1 min-h-0 overflow-auto px-3 pb-3">
+            {loadingShots ? (
+              <div className="text-gray-500 text-center py-4">加载中...</div>
+            ) : (
+              <div>
+                {filteredShots.map((s, i) => {
+                  const isActive = selectedShotId === s.id
+                  const isSelected = selectedShotIds.includes(s.id)
+                  const isDragging = draggingShotId === s.id
+                  const isDragOver = dragOverShotId === s.id && draggingShotId && draggingShotId !== s.id
+                  return (
+                    <div
+                      key={s.id}
+                      draggable
+                      onDragStart={(e) => {
+                        setDraggingShotId(s.id)
+                        setDragOverShotId(null)
+                        e.dataTransfer.effectAllowed = 'move'
+                        e.dataTransfer.setData('text/plain', s.id)
+                      }}
+                      onDragEnter={() => {
+                        if (!draggingShotId || draggingShotId === s.id) return
+                        setDragOverShotId(s.id)
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault()
+                        e.dataTransfer.dropEffect = 'move'
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        const sourceId = e.dataTransfer.getData('text/plain') || draggingShotId
+                        if (!sourceId) return
+                        reorderWithinFilter(sourceId, s.id)
+                        setDraggingShotId(null)
+                        setDragOverShotId(null)
+                      }}
+                      onDragEnd={() => {
+                        setDraggingShotId(null)
+                        setDragOverShotId(null)
+                      }}
+                      style={{
+                        opacity: isDragging ? 0.92 : 1,
+                        outline: isDragOver ? '2px dashed var(--ant-color-primary)' : 'none',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <Dropdown menu={{ items: shotContextMenu(s) }} trigger={['contextMenu']}>
+                        <Card
+                          size="small"
+                          className={[
+                            'cs-shot-item mb-2 cursor-pointer transition-colors',
+                            isSelected ? 'cs-shot-selected' : '',
+                            isActive ? 'cs-shot-active' : '',
+                          ].filter(Boolean).join(' ')}
+                          style={{
+                            opacity: s.hidden ? 0.55 : 1,
+                          }}
+                          onClick={(e) => handleSelectShot(s.id, i, e)}
+                          onDoubleClick={() => {
+                            setEditingTitleId(s.id)
+                            setEditingTitleValue(s.title)
+                          }}
+                        >
+                          <div className="flex gap-2">
+                            <div className="w-16 h-10 rounded bg-gray-200 flex-shrink-0 flex items-center justify-center text-gray-400 text-xs overflow-hidden">
+                              <span>16:9</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`cs-dot ${statusDotClass(s.status)}`} />
+                                <span className="text-xs text-gray-500 shrink-0">
+                                  {String(s.index).padStart(2, '0')}
+                                </span>
+                                {editingTitleId === s.id ? (
+                                  <Input
+                                    size="small"
+                                    value={editingTitleValue}
+                                    autoFocus
+                                    onChange={(ev) => setEditingTitleValue(ev.target.value)}
+                                    onBlur={() => {
+                                      setShots((prev) => prev.map((x) => (x.id === s.id ? { ...x, title: editingTitleValue.trim() || x.title } : x)))
+                                      setEditingTitleId(null)
+                                    }}
+                                    onKeyDown={(ev) => {
+                                      if (ev.key === 'Enter') {
+                                        (ev.currentTarget as HTMLInputElement).blur()
+                                      }
+                                      if (ev.key === 'Escape') {
+                                        setEditingTitleId(null)
+                                      }
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="font-medium text-sm truncate" title="双击编辑标题">
+                                    {s.title}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1 truncate">
+                                {shotDetail?.movement ? `${shotDetail.movement} · ` : ''}
+                                {s.duration.toFixed(1)}s
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-1 items-center">
+                                {s.hasSpeech && <Tag icon={<FileTextOutlined />} className="m-0" color="default">说话</Tag>}
+                                {s.hasMusic && <Tag icon={<SoundOutlined />} className="m-0" color="default">音乐</Tag>}
+                                {statusTag(s.status)}
+                                {s.hidden && <Tag icon={<EyeInvisibleOutlined />} className="m-0">隐藏</Tag>}
+                                {s.hasProblem && <Tag color="error" className="m-0">有问题</Tag>}
+                              </div>
+                            </div>
+                          </div>
+                        </Card>
+                      </Dropdown>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </Sider>
+
+        {/* 左侧拖拽条 */}
+        <div
+          role="separator"
+          className="cs-sep h-full"
+          style={{
+            width: 10,
+            cursor: 'col-resize',
+            background: 'transparent',
+            flexShrink: 0,
+          }}
+          onPointerDown={(e) => beginResize('left', e)}
+          title="拖拽调整左侧宽度"
+        />
+
+        {/* 中央：主预览区 */}
+        <Content className="cs-main min-w-0 min-h-0 flex flex-col" style={{ padding: 16, position: 'relative', overflow: 'hidden' }}>
+          <Card
+            title={
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="font-medium">主预览区</span>
+                {selectedShot && (
+                  <span className="text-xs text-gray-500 truncate">
+                    当前分镜：{String(selectedShot.index).padStart(2, '0')} · {selectedShot.title}
+                  </span>
+                )}
+              </div>
+            }
+            extra={
+              <Space size="small">
+                <Tooltip title="最小化预览（占位）">
+                  <Button size="small" icon={<DoubleRightOutlined />} onClick={() => message.info('最小化预览（Mock）')} />
+                </Tooltip>
+                <Tooltip title="截取当前帧（Mock）">
+                  <Button size="small" icon={<ScissorOutlined />} onClick={() => message.success('已截取当前帧（Mock）')} />
+                </Tooltip>
+              </Space>
+            }
+            className="cs-preview-card flex-1 min-h-0"
+            bodyStyle={{ height: '100%', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 12 }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <Segmented
+                size="small"
+                value={frameTab}
+                onChange={(v) => setFrameTab(v as typeof frameTab)}
+                options={[
+                  { label: '首帧', value: 'head' },
+                  { label: '关键帧列表', value: 'keyframes' },
+                  { label: '尾帧', value: 'tail' },
+                  { label: '参考对比', value: 'compare' },
+                ]}
+              />
+              <Space size="small">
+                <Select
+                  size="small"
+                  value={playbackRate}
+                  style={{ width: 86 }}
+                  onChange={(v) => setPlaybackRate(v)}
+                  options={[0.5, 1, 1.25, 1.5, 2].map((v) => ({ label: `${v}x`, value: v }))}
+                />
+                <Tooltip title="循环当前分镜">
+                  <Switch size="small" checked={loopCurrent} onChange={setLoopCurrent} />
+                </Tooltip>
+              </Space>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-8 pr-1">
+              <div className="relative">
+                <div className="cs-player-shell">
+                  <div className="aspect-video bg-black rounded overflow-hidden flex items-center justify-center">
+                  {/* Mock：没有真实视频源时仍可展示播放器结构 */}
+                  <video
+                    ref={videoRef}
+                    className="w-full h-full object-contain"
+                    controls={false}
+                    muted
+                    playsInline
+                    preload="metadata"
+                    // src 可由后端返回；此处留空以展示“无视频时”的工作台形态
+                  />
+                  {!selectedShot && (
+                    <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                      请选择分镜
+                    </div>
+                  )}
+                  {selectedShot && selectedShot.status !== 'ready' && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Badge
+                        status={selectedShot.status === 'generating' ? 'processing' : 'default'}
+                        text={selectedShot.status === 'generating' ? '生成中…' : '未生成'}
+                      />
+                    </div>
+                  )}
+                  </div>
+                </div>
+
+                {/* 播放控制条 */}
+                <div className="mt-2 flex items-center gap-2">
+                  <Button
+                    size="small"
+                    icon={<CaretLeftOutlined />}
+                    onClick={() => message.info('帧退（Mock）')}
+                  />
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={isPlaying ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                    onClick={() => {
+                      const v = videoRef.current
+                      if (!v) return
+                      if (v.paused) void v.play()
+                      else v.pause()
+                    }}
+                  >
+                    {isPlaying ? '暂停' : '播放'}
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<CaretRightOutlined />}
+                    onClick={() => message.info('帧进（Mock）')}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <Slider
+                      tooltip={{ formatter: null }}
+                      min={0}
+                      max={Math.max(1, videoDuration || selectedShot?.duration || 1)}
+                      value={videoTime}
+                      onChange={(v) => {
+                        const vv = videoRef.current
+                        if (!vv) return
+                        vv.currentTime = Number(v)
+                        setVideoTime(Number(v))
+                      }}
+                    />
+                  </div>
+                  <div className="text-xs text-gray-400 w-[110px] text-right">
+                    {videoTime.toFixed(1)} / {Math.max(videoDuration || 0, selectedShot?.duration || 0).toFixed(1)}s
+                  </div>
+                </div>
+
+                {/* 对白字幕条 */}
+                <div className="cs-subtitle mt-2 px-3 py-2">
+                  {subtitleLines.length === 0 ? (
+                    <div className="text-sm opacity-80">暂无对白字幕</div>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      {subtitleLines.map((l, idx) => {
+                        const active = idx === activeSubtitleIndex
+                        return (
+                          <div
+                            key={l.key}
+                            className="cs-sub-line text-sm cursor-pointer"
+                            style={{ opacity: active ? 1 : 0.6, fontWeight: active ? 600 : 400 }}
+                            onClick={() => {
+                              const v = videoRef.current
+                              if (!v) return
+                              v.currentTime = l.start
+                              setVideoTime(l.start)
+                            }}
+                          >
+                            <span style={{ opacity: 0.9 }}>{l.role}：</span>
+                            <span>{l.text}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* 章节级时间轴（可折叠，固定在底部不参与滚动） */}
+            <div
+              className="rounded border border-solid border-gray-200 flex-shrink-0 min-h-0 flex flex-col"
+              style={{ background: 'var(--ant-color-bg-container)' }}
+            >
+              <div className="px-3 py-2 flex items-center justify-between flex-shrink-0">
+                <div className="text-sm font-medium">章节时间轴</div>
+                <Button
+                  size="small"
+                  type="text"
+                  onClick={() => setPrefs((p) => ({ ...p, timelineCollapsed: !p.timelineCollapsed }))}
+                >
+                  {prefs.timelineCollapsed ? '展开' : '折叠'}
+                </Button>
+              </div>
+              {!prefs.timelineCollapsed && (
+                <div className="px-3 pb-3 flex-shrink-0 overflow-hidden">
+                  <div className="flex items-center gap-2 overflow-x-auto py-1 min-h-[32px]">
+                    {shots
+                      .slice()
+                      .sort((a, b) => a.index - b.index)
+                      .filter((s) => !s.hidden)
+                      .map((s) => {
+                        const active = s.id === selectedShotId
+                        return (
+                          <div
+                            key={s.id}
+                            className="shrink-0 cursor-pointer rounded"
+                            style={{
+                              width: clamp(18 + s.duration * 6, 24, 96),
+                              height: 14,
+                              background:
+                                s.status === 'ready'
+                                  ? 'rgba(34,197,94,0.45)'
+                                  : s.status === 'generating'
+                                    ? 'rgba(59,130,246,0.45)'
+                                    : 'rgba(156,163,175,0.45)',
+                              outline: active ? '2px solid var(--ant-color-primary)' : '1px solid rgba(0,0,0,0.06)',
+                            }}
+                            title={`${String(s.index).padStart(2, '0')} · ${s.title}`}
+                            onClick={() => setSelectedShotId(s.id)}
+                          />
+                        )
+                      })}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    点击条块跳转分镜；隐藏分镜不参与预览
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        </Content>
+
+        {/* 右侧：属性面板（推挤 / 覆盖） */}
+        {prefs.inspectorMode === 'push' ? (
+          <>
+            {/* 右侧拖拽条（推挤模式） */}
+            {prefs.inspectorOpen && (
+              <div
+                role="separator"
+                className="cs-sep cs-sep-strong h-full"
+                style={{
+                  width: 10,
+                  cursor: 'col-resize',
+                  background: 'transparent',
+                  flexShrink: 0,
+                }}
+                onPointerDown={(e) => beginResize('right', e)}
+                title="拖拽调整属性面板宽度"
+              />
+            )}
+            <Sider
+              width={prefs.inspectorOpen ? prefs.rightWidth : 0}
+              collapsedWidth={0}
+              collapsed={!prefs.inspectorOpen}
+              className="cs-right"
+              style={{
+                overflow: 'hidden',
+              }}
+            >
+              <Inspector
+                loadingDetail={loadingDetail}
+                shotDetail={shotDetail}
+                selectedShot={selectedShot}
+                allShots={shots}
+                generating={generating}
+                onGenerate={() => {
+                  setGenerating(true)
+                  window.setTimeout(() => {
+                    setGenerating(false)
+                    message.success('生成完成（Mock）')
+                  }, 1400)
+                }}
+                onClose={() => setPrefs((p) => ({ ...p, inspectorOpen: false }))}
+              />
+            </Sider>
+
+            {!prefs.inspectorOpen && (
+              <div
+                className="cs-right-strip"
+                onClick={() => setPrefs((p) => ({ ...p, inspectorOpen: true }))}
+                title="展开属性面板（P / Ctrl/Cmd+I）"
+              >
+                <span>属性</span>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {/* 覆盖模式：右侧抽屉覆盖中央 */}
+            {prefs.inspectorOpen && (
+              <div
+                className="absolute top-0 right-0 h-full"
+                style={{
+                  width: prefs.rightWidth,
+                  background: '#f9fafc',
+                  borderLeft: '2px solid #cbd5e1',
+                  zIndex: 20,
+                  boxShadow: '-4px 0 12px rgba(0,0,0,0.06)',
+                  display: 'flex',
+                  flexDirection: 'row',
+                }}
+              >
+                <div
+                  role="separator"
+                  className="cs-sep cs-sep-strong"
+                  style={{ width: 10, flexShrink: 0 }}
+                  onPointerDown={(e) => beginResize('right', e)}
+                  title="拖拽调整覆盖宽度"
+                />
+                <div className="flex-1 min-w-0 overflow-hidden">
+                  <Inspector
+                    loadingDetail={loadingDetail}
+                    shotDetail={shotDetail}
+                    selectedShot={selectedShot}
+                    allShots={shots}
+                    generating={generating}
+                    onGenerate={() => {
+                      setGenerating(true)
+                      window.setTimeout(() => {
+                        setGenerating(false)
+                        message.success('生成完成（Mock）')
+                      }, 1400)
+                    }}
+                    onClose={() => setPrefs((p) => ({ ...p, inspectorOpen: false }))}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 覆盖模式下，右侧边缘常驻开关 */}
+            <Tooltip title={prefs.inspectorOpen ? '收起属性面板' : '展开属性面板'}>
+              <Button
+                size="small"
+                className="absolute top-1/2 -translate-y-1/2"
+                style={{ right: 4, zIndex: 30 }}
+                icon={prefs.inspectorOpen ? <DoubleRightOutlined /> : <DoubleLeftOutlined />}
+                onClick={() => setPrefs((p) => ({ ...p, inspectorOpen: !p.inspectorOpen }))}
+              />
+            </Tooltip>
+          </>
+        )}
+      </Layout>
+
+      {/* 导出弹窗 */}
+      <Modal
+        title="导出分镜表"
+        open={exportModalOpen}
+        onCancel={() => setExportModalOpen(false)}
+        okText="导出"
+        cancelText="取消"
+        onOk={() => {
+          setExportModalOpen(false)
+          message.success(`已导出 ${exportFormat.toUpperCase()}（Mock）`)
+        }}
+      >
+        <div className="space-y-3">
+          <div className="text-sm text-gray-600">选择导出格式</div>
+          <Radio.Group
+            value={exportFormat}
+            onChange={(e) => setExportFormat(e.target.value)}
+            options={[
+              { value: 'excel', label: <span className="inline-flex items-center gap-2"><FileExcelOutlined /> Excel</span> },
+              { value: 'json', label: <span className="inline-flex items-center gap-2"><FileTextOutlined /> JSON</span> },
+              { value: 'pdf', label: <span className="inline-flex items-center gap-2"><FilePdfOutlined /> PDF</span> },
+            ]}
+          />
+          <div className="text-xs text-gray-500">将导出当前章节的分镜脚本与关键字段（Mock）。</div>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+export default ChapterStudio
+
+function Inspector(props: {
+  loadingDetail: boolean
+  shotDetail: ShotDetail | null
+  selectedShot: StudioShot | null
+  allShots: StudioShot[]
+  generating: boolean
+  onGenerate: () => void
+  onClose: () => void
+}) {
+  const { loadingDetail, shotDetail, selectedShot, allShots, generating, onGenerate, onClose } = props
+  const [imageVersion, setImageVersion] = useState('v1')
+  const [refImageType, setRefImageType] = useState<string[]>([])
+  const [useBoneDepth, setUseBoneDepth] = useState(false)
+  const [audioMode, setAudioMode] = useState<'none' | 'prompt' | 'upload'>('none')
+  const [hideShot, setHideShot] = useState(false)
+  const [relatedShotId, setRelatedShotId] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    setHideShot(Boolean(selectedShot?.hidden))
+  }, [selectedShot?.hidden])
+
+  useEffect(() => {
+    setRelatedShotId(undefined)
+  }, [selectedShot?.id])
+
+  return (
+    <div className="w-full h-full flex flex-col min-h-0">
+      <div className="cs-inspector-header flex items-center justify-between">
+        <div className="min-w-0">
+          <div className="font-medium truncate">分镜属性面板</div>
+          <div className="text-xs text-gray-500 truncate">
+            {selectedShot ? `${String(selectedShot.index).padStart(2, '0')} · ${selectedShot.title}` : '未选择分镜'}
+          </div>
+        </div>
+        <Space size="small">
+          <Tooltip title="收起">
+            <Button size="small" type="text" icon={<DoubleRightOutlined />} onClick={onClose} />
+          </Tooltip>
+        </Space>
+      </div>
+
+      <div className="cs-inspector flex-1 min-h-0 overflow-auto">
+        <Tabs
+          tabPosition="left"
+          items={[
+            {
+              key: 'camera',
+              label: '镜头语言',
+              children: (
+                <div>
+                  {loadingDetail ? (
+                    <div className="text-gray-500">加载中…</div>
+                  ) : shotDetail ? (
+                    <>
+                      <div className="cs-group">
+                        <div className="cs-group-title">
+                          <CameraOutlined /> 镜头语言
+                        </div>
+                        <div className="space-y-4">
+                          <div>
+                            <div className="text-gray-500 text-xs mb-1">景别</div>
+                            <Radio.Group
+                              value={shotDetail.cameraShot}
+                              optionType="button"
+                              buttonStyle="solid"
+                              size="small"
+                              options={['远景', '中景', '近景', '特写'].map((v) => ({ label: v, value: v }))}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-gray-500 text-xs mb-1">角度</div>
+                            <Radio.Group
+                              value={shotDetail.angle}
+                              optionType="button"
+                              size="small"
+                              options={['平视', '俯视', '仰视', '侧面'].map((v) => ({ label: v, value: v }))}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-gray-500 text-xs mb-1">运镜</div>
+                            <Radio.Group
+                              value={shotDetail.movement}
+                              size="small"
+                              options={['固定', '推镜', '拉镜', '跟镜', '其他'].map((v) => ({ label: v, value: v }))}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-gray-500 text-xs mb-1">时长（0.5–30s）</div>
+                            <div className="flex items-center gap-2">
+                              <Slider min={0.5} max={30} step={0.5} value={shotDetail.duration} style={{ flex: 1 }} />
+                              <Input size="small" value={`${shotDetail.duration}`} style={{ width: 72 }} />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="cs-group">
+                        <div className="cs-group-title">
+                          <TagOutlined /> 情绪标签
+                        </div>
+                        <div className="cs-hint">用标签快速标记镜头情绪，便于生成风格统一。</div>
+                        <div className="mt-3">
+                          <Space wrap>
+                            {['愤怒', '反转', '紧张', '温馨', '压抑'].map((t) => (
+                              <Tag key={t} className="cursor-pointer">
+                                {t}
+                              </Tag>
+                            ))}
+                            <Button size="small" type="dashed">
+                              + 自定义
+                            </Button>
+                          </Space>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-gray-500">请选择分镜</div>
+                  )}
+                </div>
+              ),
+            },
+            {
+              key: 'prompt_image',
+              label: '画面描述',
+              children: (
+                <div>
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <PictureOutlined /> 画面要素
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <div className="text-gray-500 text-xs mb-1">场景</div>
+                        <Select
+                          showSearch
+                          placeholder="搜索场景（项目/全局资产库）"
+                          className="w-full"
+                          options={[
+                            { value: 'scene1', label: '城郊老旧小区夜景' },
+                            { value: 'scene2', label: '十平米出租屋' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <div className="text-gray-500 text-xs mb-1">角色</div>
+                        <Select
+                          mode="multiple"
+                          placeholder="多选角色（智能提取 + 资产库添加）"
+                          className="w-full"
+                          options={[
+                            { value: 'actor_xiaoyu', label: '小雨' },
+                            { value: 'actor_achuan', label: '阿川' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <div className="text-gray-500 text-xs mb-1">对白（说话人 + 富文本占位）</div>
+                        <Space.Compact className="w-full">
+                          <Select
+                            size="small"
+                            style={{ width: 120 }}
+                            options={[
+                              { value: '小雨', label: '小雨' },
+                              { value: '阿川', label: '阿川' },
+                            ]}
+                            placeholder="说话人"
+                          />
+                          <Input size="small" placeholder="输入对白…" />
+                        </Space.Compact>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <div className="text-gray-500 text-xs">氛围描述</div>
+                          <Switch size="small" defaultChecked />
+                        </div>
+                        <TextArea rows={3} placeholder="氛围描述…（可选跟随画面）" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <BulbOutlined /> 图片提示词
+                    </div>
+                    <div className="cs-hint">建议按“首/中/尾”分开维护，方便版本对比与迭代。</div>
+                    <div className="mt-3">
+                      <Tabs
+                        size="small"
+                        items={[
+                          { key: 'head', label: '首', children: <TextArea rows={3} className="font-mono text-xs" placeholder="首帧提示词…" /> },
+                          { key: 'mid', label: '中', children: <TextArea rows={3} className="font-mono text-xs" placeholder="关键帧提示词…" /> },
+                          { key: 'tail', label: '尾', children: <TextArea rows={3} className="font-mono text-xs" placeholder="尾帧提示词…" /> },
+                        ]}
+                      />
+                      <Space className="mt-3" wrap>
+                        <Button size="small" icon={<ThunderboltOutlined />} onClick={() => message.success('智能提取完成（Mock）')}>
+                          智能提取
+                        </Button>
+                        <Button size="small" type="primary" icon={<ThunderboltOutlined />} loading={generating} onClick={onGenerate}>
+                          生成
+                        </Button>
+                        <Button size="small" icon={<EditOutlined />} onClick={() => message.info('从模板应用（Mock）')}>
+                          从模板
+                        </Button>
+                      </Space>
+                    </div>
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: 'prompt_video',
+              label: '视频提示词',
+              children: (
+                <div className="cs-group">
+                  <div className="cs-group-title">
+                    <FileTextOutlined /> 视频提示词
+                  </div>
+                  <TextArea rows={8} placeholder="独立视频提示词（支持多版本管理）…" className="font-mono text-xs" />
+                  <div className="cs-hint mt-2">多版本管理：可结合右侧“生成与参考”一起迭代。</div>
+                </div>
+              ),
+            },
+            {
+              key: 'av',
+              label: '音视频控制',
+              children: (
+                <div>
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <CustomerServiceOutlined /> 配乐
+                    </div>
+                    <div className="space-y-3">
+                      <Radio.Group
+                        value={audioMode}
+                        onChange={(e) => setAudioMode(e.target.value)}
+                        options={[
+                          { value: 'none', label: '无' },
+                          { value: 'prompt', label: '提示词' },
+                          { value: 'upload', label: '上传音频' },
+                        ]}
+                      />
+                      {audioMode === 'prompt' && <TextArea rows={3} placeholder="配乐提示词（支持多版本）…" />}
+                      {audioMode === 'upload' && (
+                        <Button block icon={<UploadOutlined />}>
+                          上传音频
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <SoundOutlined /> 音效
+                    </div>
+                    <div className="space-y-3">
+                      <Button block icon={<UploadOutlined />}>
+                        添加一条音效（Mock）
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <SettingOutlined /> 开关
+                    </div>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">关闭配乐</span>
+                        <Switch />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">关闭对白</span>
+                        <Switch />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">智能对口型</span>
+                        <Switch />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: 'gen_ref',
+              label: '生成与参考',
+              children: (
+                <div>
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <LinkOutlined /> 参考
+                    </div>
+                    <Select
+                      mode="multiple"
+                      placeholder="首帧 / 尾帧 / 关键帧 / 其他分镜"
+                      className="w-full"
+                      value={refImageType}
+                      onChange={setRefImageType}
+                      options={[
+                        { value: 'head', label: '本分镜首帧' },
+                        { value: 'tail', label: '本分镜尾帧' },
+                        { value: 'key', label: '本分镜关键帧' },
+                        { value: 'other', label: '项目内其他分镜关键帧' },
+                      ]}
+                    />
+                    <div className="mt-3">
+                      <div className="text-gray-500 text-xs mb-1">关联分镜（Mock）</div>
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="选择一个分镜用于参考/对比"
+                        className="w-full"
+                        value={relatedShotId}
+                        onChange={(v) => setRelatedShotId(v)}
+                        optionFilterProp="label"
+                        options={allShots
+                          .slice()
+                          .sort((a, b) => a.index - b.index)
+                          .filter((s) => s.id !== selectedShot?.id)
+                          .map((s) => ({
+                            value: s.id,
+                            label: `${String(s.index).padStart(2, '0')} · ${s.title}`,
+                          }))}
+                      />
+                      <div className="cs-hint mt-2">用于“参考对比模式 / 参数复用 / 关键帧联动”的占位交互。</div>
+                    </div>
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <ToolOutlined /> 参数
+                    </div>
+                    <Space direction="vertical" className="w-full" size="small">
+                      <Select
+                        size="small"
+                        placeholder="模型选择"
+                        options={[
+                          { value: 'model_a', label: '模型 A（写实）' },
+                          { value: 'model_b', label: '模型 B（风格化）' },
+                        ]}
+                      />
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">ControlNet（深度/骨骼）</span>
+                        <Switch checked={useBoneDepth} onChange={setUseBoneDepth} />
+                      </div>
+                      <Slider min={3} max={12} defaultValue={5} />
+                    </Space>
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <ThunderboltOutlined /> 生成
+                    </div>
+                    <Space wrap>
+                      <Button type="primary" icon={<ThunderboltOutlined />} loading={generating} onClick={onGenerate}>
+                        生成图片
+                      </Button>
+                      <Button icon={<VideoCameraOutlined />} loading={generating} onClick={onGenerate}>
+                        生成视频
+                      </Button>
+                      <Button icon={<ThunderboltOutlined />} onClick={() => message.success('已重新生成当前版本（Mock）')}>
+                        重新生成
+                      </Button>
+                    </Space>
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <AppstoreOutlined /> 版本
+                    </div>
+                    <Tabs
+                      type="card"
+                      size="small"
+                      activeKey={imageVersion}
+                      onChange={setImageVersion}
+                      items={[
+                        { key: 'v1', label: 'v1' },
+                        { key: 'v2', label: 'v2' },
+                        { key: 'v3', label: 'v3' },
+                      ]}
+                    />
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: 'ops',
+              label: '分镜操作',
+              children: (
+                <div>
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <EditOutlined /> 基本
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-gray-500 text-xs mb-1">分镜标题</div>
+                        <Input placeholder="分镜标题…" defaultValue={selectedShot?.title} />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-medium">隐藏此分镜</div>
+                          <div className="text-xs text-gray-500">隐藏后将不参与预览整章与导出</div>
+                        </div>
+                        <Switch checked={hideShot} onChange={setHideShot} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <FileTextOutlined /> 备注
+                    </div>
+                    <TextArea rows={3} placeholder="备注…" />
+                  </div>
+
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <AppstoreOutlined /> 操作
+                    </div>
+                    <Space wrap>
+                      <Button danger icon={<DeleteOutlined />} onClick={() => message.info('删除（Mock）')}>
+                        删除
+                      </Button>
+                      <Button icon={<LinkOutlined />} onClick={() => message.success('已复制（Mock）')}>
+                        复制
+                      </Button>
+                      <Button icon={<VideoCameraAddOutlined />} onClick={() => message.success('已插入（Mock）')}>
+                        插入新分镜
+                      </Button>
+                    </Space>
+                  </div>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </div>
+    </div>
+  )
+}
