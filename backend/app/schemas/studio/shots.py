@@ -1,0 +1,160 @@
+"""镜头相关 schemas：Shot / ShotDetail / ShotDialogLine / Link 表。"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+from app.models.studio import (
+    CameraAngle,
+    CameraMovement,
+    CameraShotType,
+    DialogueLineMode,
+    ShotStatus,
+    VFXType,
+)
+
+
+class ShotBase(BaseModel):
+    id: str = Field(..., description="镜头 ID")
+    chapter_id: str = Field(..., description="所属章节 ID")
+    index: int = Field(..., description="镜头序号（章节内唯一）")
+    title: str = Field(..., description="镜头标题")
+    thumbnail: str = Field("", description="缩略图 URL/路径")
+    status: ShotStatus = Field(ShotStatus.pending, description="镜头状态")
+    script_excerpt: str = Field("", description="剧本摘录")
+
+
+class ShotCreate(ShotBase):
+    pass
+
+
+class ShotUpdate(BaseModel):
+    chapter_id: str | None = None
+    index: int | None = None
+    title: str | None = None
+    thumbnail: str | None = None
+    status: ShotStatus | None = None
+    script_excerpt: str | None = None
+
+
+class ShotRead(ShotBase):
+    class Config:
+        from_attributes = True
+
+
+class ShotDetailBase(BaseModel):
+    id: str = Field(..., description="镜头 ID（与 shots.id 共享主键）")
+    camera_shot: CameraShotType = Field(..., description="景别")
+    angle: CameraAngle = Field(..., description="机位角度")
+    movement: CameraMovement = Field(..., description="运镜方式")
+    scene_id: str | None = Field(None, description="关联场景 ID（可空）")
+    duration: int = Field(0, description="时长（秒）")
+    mood_tags: list[str] = Field(default_factory=list, description="情绪标签")
+    atmosphere: str = Field("", description="氛围描述")
+    follow_atmosphere: bool = Field(True, description="是否沿用氛围")
+    has_bgm: bool = Field(False, description="是否包含 BGM")
+    vfx_type: VFXType = Field(VFXType.none, description="视效类型")
+    vfx_note: str = Field("", description="视效说明")
+
+
+class ShotDetailCreate(ShotDetailBase):
+    pass
+
+
+class ShotDetailUpdate(BaseModel):
+    camera_shot: CameraShotType | None = None
+    angle: CameraAngle | None = None
+    movement: CameraMovement | None = None
+    scene_id: str | None = None
+    duration: int | None = None
+    mood_tags: list[str] | None = None
+    atmosphere: str | None = None
+    follow_atmosphere: bool | None = None
+    has_bgm: bool | None = None
+    vfx_type: VFXType | None = None
+    vfx_note: str | None = None
+
+
+class ShotDetailRead(ShotDetailBase):
+    class Config:
+        from_attributes = True
+
+
+class ShotDialogLineBase(BaseModel):
+    id: int = Field(..., description="对话行 ID")
+    shot_detail_id: str = Field(..., description="所属镜头细节 ID")
+    index: int = Field(0, description="行号（镜头内排序）")
+    text: str = Field(..., description="台词内容")
+    line_mode: DialogueLineMode = Field(DialogueLineMode.dialogue, description="对白模式")
+    speaker_character_id: str | None = Field(None, description="说话角色 ID")
+    target_character_id: str | None = Field(None, description="听者角色 ID")
+
+
+class ShotDialogLineCreate(BaseModel):
+    shot_detail_id: str
+    index: int = 0
+    text: str
+    line_mode: DialogueLineMode = DialogueLineMode.dialogue
+    speaker_character_id: str | None = None
+    target_character_id: str | None = None
+
+
+class ShotDialogLineUpdate(BaseModel):
+    index: int | None = None
+    text: str | None = None
+    line_mode: DialogueLineMode | None = None
+    speaker_character_id: str | None = None
+    target_character_id: str | None = None
+
+
+class ShotDialogLineRead(ShotDialogLineBase):
+    class Config:
+        from_attributes = True
+
+
+class ShotLinkBase(BaseModel):
+    id: int = Field(..., description="关联行 ID")
+    shot_id: str = Field(..., description="镜头 ID")
+    index: int = Field(0, description="镜头内排序")
+    note: str = Field("", description="备注")
+
+
+class ShotAssetLinkCreate(BaseModel):
+    shot_id: str
+    asset_id: str
+    index: int = 0
+    note: str = ""
+
+
+class ShotLinkUpdate(BaseModel):
+    index: int | None = None
+    note: str | None = None
+
+
+class ShotActorImageLinkRead(ShotLinkBase):
+    actor_image_id: str
+
+    class Config:
+        from_attributes = True
+
+
+class ShotSceneLinkRead(ShotLinkBase):
+    scene_id: str
+
+    class Config:
+        from_attributes = True
+
+
+class ShotPropLinkRead(ShotLinkBase):
+    prop_id: str
+
+    class Config:
+        from_attributes = True
+
+
+class ShotCostumeLinkRead(ShotLinkBase):
+    costume_id: str
+
+    class Config:
+        from_attributes = True
+
